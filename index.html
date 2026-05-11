@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Price Monitor</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+         background: #f5f5f7; color: #1d1d1f; min-height: 100vh; }
+
+  header { background: #1d1d1f; color: white; padding: 20px 24px;
+           display: flex; align-items: center; justify-content: space-between; }
+  header h1 { font-size: 1.1rem; font-weight: 600; }
+  #last-update { font-size: 0.78rem; color: #888; }
+
+  main { max-width: 800px; margin: 0 auto; padding: 24px 16px; }
+
+  .card { background: white; border-radius: 16px; padding: 24px;
+          margin-bottom: 20px; box-shadow: 0 2px 12px rgba(0,0,0,.07); }
+
+  .product-header { display: flex; justify-content: space-between; align-items: flex-start; }
+  .product-name { font-size: 1rem; font-weight: 600; line-height: 1.4; max-width: 60%; }
+  .size-badge { background: #f0f0f0; border-radius: 8px; padding: 4px 10px;
+                font-size: 0.78rem; color: #555; }
+
+  .prices { display: flex; gap: 32px; margin: 20px 0 0; align-items: flex-end; }
+  .price-block { display: flex; flex-direction: column; gap: 2px; }
+  .price-label { font-size: 0.72rem; color: #888; text-transform: uppercase; letter-spacing: .04em; }
+  .price-current { font-size: 2.2rem; font-weight: 700; color: #1d1d1f; line-height: 1; }
+  .price-target { font-size: 1.1rem; font-weight: 500; color: #888; }
+
+  .badge { display: inline-flex; align-items: center; gap: 5px;
+           border-radius: 20px; padding: 5px 12px; font-size: 0.82rem; font-weight: 600;
+           margin-top: 16px; }
+  .badge-drop   { background: #d4edda; color: #155724; }
+  .badge-target { background: #fff3cd; color: #856404; }
+  .badge-same   { background: #f0f0f0; color: #555; }
+  .badge-na     { background: #f0f0f0; color: #888; }
+
+  .progress-wrap { margin-top: 20px; }
+  .progress-label { display: flex; justify-content: space-between;
+                    font-size: 0.75rem; color: #888; margin-bottom: 6px; }
+  .progress-bar { height: 6px; background: #e9e9e9; border-radius: 4px; overflow: hidden; }
+  .progress-fill { height: 100%; border-radius: 4px;
+                   background: linear-gradient(90deg, #34c759, #ff9f0a);
+                   transition: width .5s ease; }
+
+  .chart-wrap { margin-top: 24px; height: 160px; }
+
+  .history-table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 0.85rem; }
+  .history-table th { text-align: left; padding: 8px 12px; color: #888;
+                      font-weight: 500; border-bottom: 1px solid #f0f0f0; }
+  .history-table td { padding: 8px 12px; border-bottom: 1px solid #f8f8f8; }
+  .history-table tr:last-child td { border-bottom: none; }
+  .drop { color: #34c759; font-weight: 600; }
+  .rise { color: #ff3b30; }
+
+  .empty { text-align: center; padding: 60px 20px; color: #888; font-size: 0.95rem; }
+  .spinner { display: inline-block; width: 20px; height: 20px; border: 2px solid #ddd;
+             border-top-color: #555; border-radius: 50%; animation: spin .7s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .buy-btn { display: inline-block; margin-top: 20px; background: #0071e3; color: white;
+             padding: 10px 22px; border-radius: 20px; text-decoration: none;
+             font-size: 0.88rem; font-weight: 500; }
+  .buy-btn:hover { background: #0077ed; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>👟 Price Monitor</h1>
+  <span id="last-update">Загрузка...</span>
+</header>
+
+<main id="app">
+  <div class="empty"><div class="spinner"></div><br><br>Загружаю данные...</div>
+</main>
+
+<script>
+const REPO = "goliatoyv/price-monitor";
+const RAW  = `https://raw.githubusercontent.com/${REPO}/main`;
+
+async function load() {
+  const [cfgRes, histRes] = await Promise.all([
+    fetch(`${RAW}/config.json`),
+    fetch(`${RAW}/price_history.json`)
+  ]);
+
+  const config  = await cfgRes.json();
+  const history = histRes.ok ? await histRes.json() : {};
+
+  render(config, history);
+}
+
+function fmt(n)  { return n != null ? `$${Number(n).toFixed(2)}` : "—"; }
+function fmtDate(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return d.toLocaleString("ru-RU", { day:"numeric", month:"short",
+                                     hour:"2-digit", minute:"2-digit" });
+}
+
+function render(config, history) {
+  const app = document.getElementById("app");
+  app.innerHTML = "";
+
+  let lastTs = null;
+
+  config.products.forEach((p, idx) => {
+    const entries = (history[p.url] || []).slice().reverse(); // новые первыми
+    const latest  = entries[0] || null;
+    const prev    = entries[1] || null;
+
+    const cur  = latest?.price ?? null;
+    const old  = prev?.price   ?? null;
+    const tgt  = p.target_price ?? null;
+
+    if (latest?.timestamp && (!lastTs || latest.timestamp > lastTs))
+      lastTs = latest.timestamp;
+
+    // статус
+    let badge = "";
+    if (cur == null) {
+      badge = `<span class="badge badge-na">Нет данных</span>`;
+    } else if (old != null && cur < old) {
+      const diff = (old - cur).toFixed(2);
+      const pct  = ((old - cur) / old * 100).toFixed(0);
+      badge = `<span class="badge badge-drop">↓ −$${diff} (−${pct}%)</span>`;
+    } else if (tgt != null && cur <= tgt) {
+      badge = `<span class="badge badge-target">🎯 Целевая цена достигнута!</span>`;
+    } else {
+      badge = `<span class="badge badge-same">Без изменений</span>`;
+    }
+
+    // прогресс к цели
+    let progressHtml = "";
+    if (tgt != null && cur != null) {
+      const max  = old || cur * 1.3;
+      const pct  = Math.min(100, Math.max(0, ((max - cur) / (max - tgt)) * 100));
+      progressHtml = `
+        <div class="progress-wrap">
+          <div class="progress-label">
+            <span>Прогресс к цели ${fmt(tgt)}</span>
+            <span>${pct.toFixed(0)}%</span>
+          </div>
+          <div class="progress-bar">
+            <div class="progress-fill" style="width:${pct}%"></div>
+          </div>
+        </div>`;
+    }
+
+    // история (последние 5)
+    const rows = entries.slice(0, 5).map((e, i) => {
+      const next  = entries[i + 1];
+      let change  = "";
+      if (next) {
+        const d = e.price - next.price;
+        if (Math.abs(d) > 0.01)
+          change = d < 0
+            ? `<span class="rise">+$${Math.abs(d).toFixed(2)}</span>`
+            : `<span class="drop">−$${Math.abs(d).toFixed(2)}</span>`;
+      }
+      return `<tr>
+        <td>${fmtDate(e.timestamp)}</td>
+        <td><b>${fmt(e.price)}</b></td>
+        <td>${change}</td>
+      </tr>`;
+    }).join("");
+
+    const historyHtml = entries.length > 1 ? `
+      <table class="history-table">
+        <thead><tr><th>Дата</th><th>Цена</th><th>Изменение</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>` : "";
+
+    // chart data
+    const chartPrices = [...entries].reverse().map(e => e.price);
+    const chartLabels = [...entries].reverse().map(e =>
+      new Date(e.timestamp).toLocaleDateString("ru-RU", { day:"numeric", month:"short" }));
+
+    const card = document.createElement("div");
+    card.className = "card";
+    card.innerHTML = `
+      <div class="product-header">
+        <div class="product-name">${p.name}</div>
+        ${p.size ? `<span class="size-badge">${p.size}</span>` : ""}
+      </div>
+      <div class="prices">
+        <div class="price-block">
+          <span class="price-label">Текущая цена</span>
+          <span class="price-current">${fmt(cur)}</span>
+        </div>
+        ${tgt != null ? `<div class="price-block">
+          <span class="price-label">Моя цель</span>
+          <span class="price-target">${fmt(tgt)}</span>
+        </div>` : ""}
+      </div>
+      ${badge}
+      ${progressHtml}
+      ${chartPrices.length > 1 ? `<div class="chart-wrap"><canvas id="chart-${idx}"></canvas></div>` : ""}
+      ${historyHtml}
+      <a href="${p.url}" class="buy-btn" target="_blank">Открыть товар →</a>
+    `;
+    app.appendChild(card);
+
+    // рисуем график после вставки в DOM
+    if (chartPrices.length > 1) {
+      const ctx = card.querySelector(`#chart-${idx}`);
+      new Chart(ctx, {
+        type: "line",
+        data: {
+          labels: chartLabels,
+          datasets: [{
+            data: chartPrices,
+            borderColor: "#0071e3",
+            backgroundColor: "rgba(0,113,227,.08)",
+            borderWidth: 2,
+            pointRadius: 3,
+            fill: true,
+            tension: 0.3,
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { grid: { display: false }, ticks: { font: { size: 11 } } },
+            y: {
+              ticks: {
+                callback: v => `$${v}`,
+                font: { size: 11 }
+              },
+              grid: { color: "#f0f0f0" }
+            }
+          }
+        }
+      });
+    }
+  });
+
+  document.getElementById("last-update").textContent =
+    lastTs ? `Последняя проверка: ${fmtDate(lastTs)}` : "Ещё не проверялось";
+}
+
+load().catch(() => {
+  document.getElementById("app").innerHTML =
+    `<div class="empty">Не удалось загрузить данные.<br>Проверь что репо публичное и Actions запускались.</div>`;
+});
+</script>
+</body>
+</html>
