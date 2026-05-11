@@ -8,6 +8,7 @@ Price Monitor — Joe's New Balance Outlet
 """
 
 import os
+import cloudscraper
 import requests
 from bs4 import BeautifulSoup
 import json
@@ -81,7 +82,8 @@ def fetch_price(url: str) -> dict | None:
       3. Regex по тексту страницы
     """
     try:
-        resp = requests.get(url, headers=HEADERS, timeout=20)
+        scraper = cloudscraper.create_scraper(browser={"browser": "chrome", "platform": "darwin"})
+        resp = scraper.get(url, headers=HEADERS, timeout=30)
         resp.raise_for_status()
     except Exception as e:
         log.error("Не удалось загрузить страницу %s: %s", url, e)
