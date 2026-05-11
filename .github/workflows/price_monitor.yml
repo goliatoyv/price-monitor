@@ -1,0 +1,37 @@
+name: Price Monitor
+
+on:
+  schedule:
+    - cron: "0 */4 * * *"   # каждые 4 часа
+  workflow_dispatch:          # кнопка ручного запуска в GitHub
+
+jobs:
+  check-prices:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run price monitor
+        env:
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+        run: python price_monitor.py
+
+      - name: Upload price history
+        uses: actions/upload-artifact@v4
+        with:
+          name: price-history
+          path: |
+            price_history.json
+            monitor.log
+          retention-days: 30

@@ -1,0 +1,22 @@
+{
+  "products": [
+    {
+      "name": "U1906XV1 Gore-Tex (Black/Alkaline Green, M7.5)",
+      "url": "https://www.joesnewbalanceoutlet.com/pd/u1906xv1-gore-tex/U190631U-D-075.html",
+      "target_price": 90.00,
+      "size": "M7.5 / W9"
+    }
+  ],
+  "check_interval_hours": 4,
+  "notifications": {
+    "email": {
+      "enabled": true,
+      "smtp_host": "smtp.gmail.com",
+      "smtp_port": 587,
+      "sender": "goliatoyv@gmail.com",
+      "password": "",
+      "recipients": ["goliatoyv@gmail.com"]
+    }
+  },
+  "history_file": "price_history.json"
+}
