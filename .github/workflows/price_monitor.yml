@@ -2,11 +2,14 @@ name: Price Monitor
 
 on:
   schedule:
-    - cron: "0 */4 * * *"   # каждые 4 часа
+    - cron: "0 8 * * *"     # раз в день в 8:00 UTC (11:00 Киев)
   workflow_dispatch:          # кнопка ручного запуска в GitHub
 
 permissions:
   contents: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   check-prices:
