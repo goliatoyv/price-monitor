@@ -90,6 +90,9 @@ def fetch_price(url: str) -> dict | None:
     soup = BeautifulSoup(resp.text, "html.parser")
     html_text = resp.text
 
+    log.debug("HTML preview: %s", html_text[:500])
+    log.info("HTTP %s, размер страницы: %d байт", resp.status_code, len(html_text))
+
     # ── Стратегия 1: JSON-LD ──────────────────────────────────────────────
     for script in soup.find_all("script", type="application/ld+json"):
         try:
@@ -167,6 +170,7 @@ def fetch_price(url: str) -> dict | None:
             }
 
     log.warning("Не удалось распарсить цену для %s", url)
+    log.warning("HTML (первые 3000 символов):\n%s", html_text[:3000])
     return None
 
 
