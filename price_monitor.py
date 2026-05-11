@@ -8,8 +8,7 @@ Price Monitor — Joe's New Balance Outlet
 """
 
 import os
-import cloudscraper
-import requests
+from curl_cffi import requests
 from bs4 import BeautifulSoup
 import json
 import re
@@ -82,8 +81,7 @@ def fetch_price(url: str) -> dict | None:
       3. Regex по тексту страницы
     """
     try:
-        scraper = cloudscraper.create_scraper(browser={"browser": "chrome", "platform": "darwin"})
-        resp = scraper.get(url, headers=HEADERS, timeout=30)
+        resp = requests.get(url, headers=HEADERS, timeout=30, impersonate="chrome124")
         resp.raise_for_status()
     except Exception as e:
         log.error("Не удалось загрузить страницу %s: %s", url, e)
@@ -254,6 +252,7 @@ def send_telegram(config: dict, product: dict, old_price: float, new_price: floa
             json={"chat_id": chat_id, "text": text, "parse_mode": "MarkdownV2",
                   "disable_web_page_preview": False},
             timeout=10,
+            impersonate="chrome124",
         )
         resp.raise_for_status()
         log.info("📨 Telegram отправлен в chat %s", chat_id)
