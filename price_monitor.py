@@ -222,6 +222,43 @@ def send_email(config: dict, product: dict, old_price: float, new_price: float):
         log.error("Ошибка отправки email: %s", e)
 
 
+# ─── Telegram-уведомление ──────────────────────────────────────────────────
+def send_telegram(config: dict, product: dict, old_price: float, new_price: float):
+    cfg = config["notifications"].get("telegram", {})
+    if not cfg.get("enabled"):
+        return
+
+    token   = os.environ.get("TELEGRAM_BOT_TOKEN") or cfg.get("bot_token", "")
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID")   or cfg.get("chat_id", "")
+
+    if not token or not chat_id:
+        log.warning("Telegram не настроен: нет токена или chat_id")
+        return
+
+    pct  = ((old_price - new_price) / old_price * 100) if old_price else 0
+    size = product.get("size", "")
+    text = (
+        f"🏷 *Цена упала!*\n\n"
+        f"*{product['name']}*"
+        + (f" `{size}`" if size else "") + "\n\n"
+        f"~~${old_price:.2f}~~ → *${new_price:.2f}*\n"
+        f"Скидка: −{pct:.0f}% (−${old_price - new_price:.2f})\n\n"
+        f"[Купить →]({product['url']})"
+    )
+
+    try:
+        resp = requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": chat_id, "text": text, "parse_mode": "MarkdownV2",
+                  "disable_web_page_preview": False},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        log.info("📨 Telegram отправлен в chat %s", chat_id)
+    except Exception as e:
+        log.error("Ошибка отправки Telegram: %s", e)
+
+
 # ─── Основная проверка ─────────────────────────────────────────────────────
 def check_product(product: dict, config: dict, history: dict) -> None:
     url = product["url"]
@@ -264,6 +301,7 @@ def check_product(product: dict, config: dict, history: dict) -> None:
         log.info("🎉 %s (%s)", name, ", ".join(reasons))
         old = last_price or (result.get("original_price") or current_price * 1.1)
         send_email(config, product, old, current_price)
+        send_telegram(config, product, old, current_price)
     else:
         log.info("Цена не изменилась: $%.2f", current_price)
 

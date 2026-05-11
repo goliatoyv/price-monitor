@@ -18,5 +18,10 @@
       "recipients": ["goliatoyv@gmail.com"]
     }
   },
-  "history_file": "price_history.json"
+  "history_file": "price_history.json",
+  "telegram": {
+    "enabled": true,
+    "bot_token": "",
+    "chat_id": ""
+  }
 }
