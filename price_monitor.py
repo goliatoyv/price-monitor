@@ -83,8 +83,13 @@ def fetch_price(url: str) -> dict | None:
     try:
         scraper_key = os.environ.get("SCRAPER_API_KEY", "")
         if scraper_key:
-            api_url = f"http://api.scraperapi.com?api_key={scraper_key}&url={url}&render=true"
-            resp = requests.get(api_url, timeout=60, impersonate="chrome124")
+            from urllib.parse import quote
+            resp = requests.get(
+                "http://api.scraperapi.com",
+                params={"api_key": scraper_key, "url": url, "render": "true"},
+                timeout=120,
+                impersonate="chrome124",
+            )
         else:
             resp = requests.get(url, headers=HEADERS, timeout=30, impersonate="chrome124")
         resp.raise_for_status()
