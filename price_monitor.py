@@ -83,11 +83,10 @@ def fetch_price(url: str) -> dict | None:
     try:
         scraper_key = os.environ.get("SCRAPER_API_KEY", "")
         if scraper_key:
-            from urllib.parse import quote
             resp = requests.get(
                 "http://api.scraperapi.com",
-                params={"api_key": scraper_key, "url": url, "render": "true"},
-                timeout=120,
+                params={"api_key": scraper_key, "url": url},
+                timeout=60,
                 impersonate="chrome124",
             )
         else:
@@ -99,9 +98,6 @@ def fetch_price(url: str) -> dict | None:
 
     soup = BeautifulSoup(resp.text, "html.parser")
     html_text = resp.text
-
-    log.debug("HTML preview: %s", html_text[:500])
-    log.info("HTTP %s, размер страницы: %d байт", resp.status_code, len(html_text))
 
     # ── Стратегия 1: JSON-LD ──────────────────────────────────────────────
     for script in soup.find_all("script", type="application/ld+json"):
@@ -180,7 +176,6 @@ def fetch_price(url: str) -> dict | None:
             }
 
     log.warning("Не удалось распарсить цену для %s", url)
-    log.warning("HTML (первые 3000 символов):\n%s", html_text[:3000])
     return None
 
 
@@ -236,42 +231,168 @@ def send_email(config: dict, product: dict, old_price: float, new_price: float):
         log.error("Ошибка отправки email: %s", e)
 
 
-# ─── Telegram-уведомление ──────────────────────────────────────────────────
-def send_telegram(config: dict, product: dict, old_price: float, new_price: float):
-    cfg = config["notifications"].get("telegram", {})
-    if not cfg.get("enabled"):
-        return
+# ─── Telegram helpers ──────────────────────────────────────────────────────
+def _tg_escape(text: str) -> str:
+    """Экранирует спецсимволы для MarkdownV2."""
+    # Символы, которые нужно экранировать в MarkdownV2
+    for ch in r"\_*[]()~`>#+-=|{}.!":
+        text = text.replace(ch, f"\\{ch}")
+    return text
 
-    token   = os.environ.get("TELEGRAM_BOT_TOKEN") or cfg.get("bot_token", "")
-    chat_id = os.environ.get("TELEGRAM_CHAT_ID")   or cfg.get("chat_id", "")
 
-    if not token or not chat_id:
-        log.warning("Telegram не настроен: нет токена или chat_id")
-        return
-
-    pct  = ((old_price - new_price) / old_price * 100) if old_price else 0
-    size = product.get("size", "")
-    text = (
-        f"🏷 *Цена упала!*\n\n"
-        f"*{product['name']}*"
-        + (f" `{size}`" if size else "") + "\n\n"
-        f"~~${old_price:.2f}~~ → *${new_price:.2f}*\n"
-        f"Скидка: −{pct:.0f}% (−${old_price - new_price:.2f})\n\n"
-        f"[Купить →]({product['url']})"
-    )
+def _tg_post(token: str, chat_id: str, text: str, reply_markup: dict | None = None) -> bool:
+    """
+    Отправляет сообщение в один чат/канал/группу.
+    chat_id — любой из форматов:
+      • числовой ID личного чата:  "123456789"
+      • ID группы/супергруппы:     "-1001234567890"
+      • username канала:            "@my_channel"
+    """
+    payload: dict = {
+        "chat_id": chat_id,
+        "text": text,
+        "parse_mode": "MarkdownV2",
+        "link_preview_options": {"is_disabled": False},
+    }
+    if reply_markup:
+        payload["reply_markup"] = reply_markup
 
     try:
         resp = requests.post(
             f"https://api.telegram.org/bot{token}/sendMessage",
-            json={"chat_id": chat_id, "text": text, "parse_mode": "MarkdownV2",
-                  "disable_web_page_preview": False},
-            timeout=10,
+            json=payload,
+            timeout=15,
             impersonate="chrome124",
         )
-        resp.raise_for_status()
-        log.info("📨 Telegram отправлен в chat %s", chat_id)
+        if resp.status_code == 200:
+            log.info("📨 Telegram → %s", chat_id)
+            return True
+        else:
+            log.error("Telegram API ошибка %s для %s: %s", resp.status_code, chat_id, resp.text[:200])
+            return False
     except Exception as e:
-        log.error("Ошибка отправки Telegram: %s", e)
+        log.error("Ошибка отправки Telegram в %s: %s", chat_id, e)
+        return False
+
+
+# ─── Telegram-уведомление ──────────────────────────────────────────────────
+def send_telegram(config: dict, product: dict, old_price: float, new_price: float):
+    """
+    Поддерживает отправку в несколько адресатов одновременно:
+      • канал (@channel или -100xxx)
+      • группу (-100xxx)
+      • личный чат (числовой ID)
+
+    Конфиг (config.json):
+      "telegram": {
+        "enabled": true,
+        "bot_token": "123:AAA...",
+        "targets": [
+          {"chat_id": "@iconic_deals",   "label": "Канал"},
+          {"chat_id": "-1001234567890",  "label": "Группа"},
+          {"chat_id": "987654321",       "label": "Личная"}
+        ]
+      }
+
+    Как добавить бота в канал/группу:
+      1. Создай бота через @BotFather → получи токен
+      2. Добавь бота в канал/группу как администратора
+         (права: отправка сообщений)
+      3. Узнай chat_id: перешли любое сообщение из канала боту
+         @userinfobot или используй /getUpdates
+    """
+    cfg = config["notifications"].get("telegram", {})
+    if not cfg.get("enabled"):
+        return
+
+    token = os.environ.get("TELEGRAM_BOT_TOKEN") or cfg.get("bot_token", "")
+    if not token:
+        log.warning("Telegram: нет bot_token")
+        return
+
+    # Поддержка как старого формата (один chat_id), так и нового (список targets)
+    targets: list[dict] = cfg.get("targets", [])
+    if not targets:
+        single = os.environ.get("TELEGRAM_CHAT_ID") or cfg.get("chat_id", "")
+        if single:
+            targets = [{"chat_id": single, "label": "default"}]
+        else:
+            log.warning("Telegram: не задан ни один targets / chat_id")
+            return
+
+    pct  = ((old_price - new_price) / old_price * 100) if old_price else 0
+    diff = old_price - new_price
+    name = _tg_escape(product["name"])
+    size = _tg_escape(product.get("size", ""))
+    url  = product["url"]   # URL не экранируем — он идёт в []()
+
+    text = (
+        f"🏷 *Цена упала\\!*\n\n"
+        f"*{name}*" + (f"  `{size}`" if size else "") + "\n\n"
+        f"~${old_price:.2f}~ → *${new_price:.2f}*\n"
+        f"Скидка: \\-{pct:.0f}% \\(\\-${diff:.2f}\\)\n\n"
+        f"[Купить →]({url})"
+    )
+
+    # Inline-кнопка "Купить" (URL-тип — работает в каналах без сервера)
+    reply_markup = {
+        "inline_keyboard": [[
+            {"text": "🛍 Купить сейчас", "url": url},
+        ]]
+    }
+
+    for target in targets:
+        cid = target.get("chat_id", "")
+        if cid:
+            _tg_post(token, str(cid), text, reply_markup)
+
+
+# ─── Telegram дайджест (ежедневная сводка) ─────────────────────────────────
+def send_telegram_digest(config: dict, history: dict, products: list[dict]):
+    """
+    Ежедневная сводка изменений цен по всем позициям.
+    Запускать раз в сутки отдельно: python3 price_monitor.py --digest
+    """
+    cfg = config["notifications"].get("telegram", {})
+    if not cfg.get("enabled"):
+        return
+
+    token = os.environ.get("TELEGRAM_BOT_TOKEN") or cfg.get("bot_token", "")
+    targets: list[dict] = cfg.get("targets", [])
+    if not targets:
+        single = os.environ.get("TELEGRAM_CHAT_ID") or cfg.get("chat_id", "")
+        targets = [{"chat_id": single}] if single else []
+
+    if not token or not targets:
+        return
+
+    lines = ["📊 *Дайджест цен*\n"]
+    changed = 0
+
+    for product in products:
+        url = product["url"]
+        entries = history.get(url, [])
+        if len(entries) < 2:
+            continue
+        last  = entries[-1]["price"]
+        prev  = entries[-2]["price"]
+        if last == prev:
+            continue
+
+        changed += 1
+        arrow = "📉" if last < prev else "📈"
+        diff  = abs(last - prev)
+        name  = _tg_escape(product["name"][:40])
+        lines.append(f"{arrow} {name}: ~${prev:.0f}~ → *${last:.0f}* \\(\\-${diff:.0f}\\)")
+
+    if not changed:
+        lines.append("_Изменений цен за последние 24ч не обнаружено_")
+
+    text = "\n".join(lines)
+    for target in targets:
+        cid = target.get("chat_id", "")
+        if cid:
+            _tg_post(token, str(cid), text)
 
 
 # ─── Основная проверка ─────────────────────────────────────────────────────
@@ -353,5 +474,9 @@ if __name__ == "__main__":
     import sys
     if "--loop" in sys.argv:
         run_loop()
+    elif "--digest" in sys.argv:
+        _cfg = load_config()
+        _hist = load_history()
+        send_telegram_digest(_cfg, _hist, _cfg["products"])
     else:
         run_once()
