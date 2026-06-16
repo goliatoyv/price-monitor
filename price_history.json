@@ -144,6 +144,11 @@
       "price": 109.99,
       "original": null,
       "timestamp": "2026-06-15T13:45:10"
+    },
+    {
+      "price": 109.99,
+      "original": null,
+      "timestamp": "2026-06-16T12:44:57"
     }
   ]
 }
